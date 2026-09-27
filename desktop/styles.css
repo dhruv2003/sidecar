@@ -26,4 +26,20 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 #error { position: fixed; bottom: 12px; left: 240px; right: 16px; z-index: 20; margin: 0; padding: 12px 16px; border: 1px solid #deb8ac; border-radius: 5px; background: #fff4ef; color: #923d26; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 35vh; overflow: auto; }
 #update-notice { position: fixed; bottom: 16px; right: 16px; z-index: 5; }
 body.settings-open #update-notice { display: none; }
+#update-prompt {
+  position: fixed;
+  right: 16px;
+  bottom: 64px;
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(55vh, 420px);
+  overflow: auto;
+  z-index: 11;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--launcher-line);
+  border-radius: 6px;
+  background: var(--launcher-surface);
+}
+#update-prompt h2 { margin: 0 0 8px; }
+#update-prompt .controls { margin-top: 10px; justify-content: flex-end; }
 @media (max-width: 560px) { .folder, .settings-heading { flex-direction: column; align-items: stretch; } .folder input { flex: auto; } .heading-actions { flex-wrap: wrap; } }

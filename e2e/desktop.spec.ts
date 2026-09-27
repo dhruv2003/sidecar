@@ -34,7 +34,10 @@ test.beforeEach(async ({ page }) => {
       win.calls.push(command)
       if (command === 'desktop_status' && win.savedWorkspace) settings.workspaceRoot = win.savedWorkspace
       if (command === 'choose_workspace') return '/Users/test/Projects'
-      if (command === 'check_for_update') return win.updateFixture || { configured: false, version: null, message: 'Automatic updates are not configured for this build.' }
+      if (command === 'check_for_update') {
+        if (win.updateFailure) throw new Error('Could not fetch a valid release JSON from the remote')
+        return win.updateFixture || { configured: false, version: null, message: 'Automatic updates are not configured for this build.' }
+      }
       if (command === 'download_update') { if (win.badSignature) throw new Error('Update signature verification failed'); return }
       if (command === 'install_update') { if (win.activeRequest) throw new Error('Finish all active requests before installing'); return }
       if (command === 'save_settings') settings = args.settings
@@ -108,6 +111,41 @@ test('update requires confirmation and shows active work rejection', async ({ pa
   await expect(page.getByRole('alert')).toContainText('active requests')
 })
 
+test('update prompt can be deferred once per version and reappears for newer versions', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).updateFixture = { configured: true, version: '1.4.1', message: 'Update available', notes: 'First release notes' }
+  })
+  await startDesktop(page)
+  await expect(page.locator('#update-prompt')).toBeVisible()
+  await expect(page.locator('#update-prompt-version')).toHaveText('Version 1.4.1')
+  await page.getByRole('button', { name: 'Later', exact: true }).click()
+  await expect(page.locator('#update-prompt')).toBeHidden()
+  await expect(page.locator('#update-notice')).toBeHidden()
+  await openSettings(page)
+  await page.getByRole('button', { name: 'Check for updates' }).click()
+  await expect(page.locator('#update-prompt')).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Download update' })).toBeVisible()
+  await page.evaluate(() => {
+    (window as any).updateFixture = { configured: true, version: '1.4.2', message: 'Update available', notes: 'Second release notes' }
+  })
+  await page.getByRole('button', { name: 'Check for updates' }).click()
+  await expect(page.locator('#update-prompt')).toBeVisible()
+  await expect(page.locator('#update-prompt-version')).toHaveText('Version 1.4.2')
+  await expect(page.locator('#update-prompt-notes')).toContainText('Second release notes')
+})
+
+test('update prompt update-now downloads and prepares install in settings', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).updateFixture = { configured: true, version: '1.4.1', message: 'Update available' }
+  })
+  await startDesktop(page)
+  await expect(page.locator('#update-prompt')).toBeVisible()
+  await page.getByRole('button', { name: 'Update now', exact: true }).click()
+  await expect(page.locator('#settings-panel')).toBeVisible()
+  await expect(page.locator('#update-status')).toContainText('Verified update ready to install.')
+  await expect(page.getByRole('button', { name: 'Install & restart' })).toBeVisible()
+})
+
 test('only the running dashboard can request the fixed authentication browser', async ({ page }) => {
   await page.goto('http://desktop.test')
   await page.locator('#workspace').fill('/Users/test/Projects')
@@ -172,6 +210,17 @@ test('native Settings can manually check for updates after gateway startup failu
   await page.getByRole('button', { name: 'Check for updates' }).click()
   await expect(page.locator('#update-status')).toContainText('1.4.1')
   await expect(page.getByRole('button', { name: 'Download update' })).toBeEnabled()
+})
+
+test('automatic update check stays silent when update metadata is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    ;(window as any).updateFailure = true
+  })
+  await page.goto('http://desktop.test')
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(page.locator('#update-details')).toBeHidden()
+  await expect(page.locator('#update-status')).toHaveText('')
+  await expect(page.locator('#update-notice')).toBeHidden()
 })
 
 test('desktop shows stopped health and safe preference defaults', async ({ page }) => {

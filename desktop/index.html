@@ -32,7 +32,16 @@
       <section class="native-panel about"><h2>About</h2><p>Sidecar · <span data-app-version>Version unavailable</span></p><p><a href="https://sidecar.co.in" target="_blank" rel="noopener noreferrer">sidecar.co.in</a></p><p class="creator">Created by Dhruv · <button id="creator-site" type="button">thisisdhruv.in</button></p><p class="notice hint">Your keys, accounts, and application settings stay on this computer.</p></section>
     </div></div>
   </main>
-  <button id="update-notice" type="button" hidden>Update available — view details</button>
+  <button id="update-notice" type="button" hidden>Update available — update now or later</button>
+  <section id="update-prompt" role="dialog" aria-modal="false" aria-labelledby="update-prompt-title" hidden>
+    <h2 id="update-prompt-title">Sidecar update available</h2>
+    <p id="update-prompt-version" class="hint"></p>
+    <pre id="update-prompt-notes" hidden></pre>
+    <div class="controls">
+      <button id="update-now" type="button" class="primary">Update now</button>
+      <button id="update-later" type="button">Later</button>
+    </div>
+  </section>
   <p id="error" role="alert" hidden></p>
   <script src="app.js"></script>
 </body>
