@@ -18,6 +18,8 @@ let dashboardReady = false;
 let pendingNavigation = null;
 let frameUrl = null;
 let models = [];
+const deferredUpdateVersionKey = "codex-desktop-deferred-update-version";
+const periodicUpdateCheckMs = 4 * 60 * 60 * 1000;
 const defaultsKey = "codex-desktop-ui-defaults";
 const views = new Set(["overview", "api-keys", "connect", "requests", "diagnostics", "settings", "onboarding"]);
 const recordWithKeys = (value, keys) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -154,11 +156,32 @@ function closeSettings(view) {
   }
   if (state.running) $("dashboard").focus(); else $("settings-toggle").focus();
 }
+function deferredUpdateVersion() {
+  try { return localStorage.getItem(deferredUpdateVersionKey); } catch { return null; }
+}
+function deferUpdateVersion(version) {
+  if (!version) return;
+  try { localStorage.setItem(deferredUpdateVersionKey, version); } catch { /* Keep deferral for this session only when storage is unavailable. */ }
+}
+function clearDeferredUpdateVersion(version) {
+  if (!version) return;
+  try { if (localStorage.getItem(deferredUpdateVersionKey) === version) localStorage.removeItem(deferredUpdateVersionKey); } catch { /* Ignore unavailable storage. */ }
+}
+function showUpdatePrompt(version, notes) {
+  $("update-prompt-version").textContent = `Version ${version}`;
+  $("update-prompt-notes").textContent = notes || "";
+  $("update-prompt-notes").hidden = !notes;
+  $("update-prompt").hidden = false;
+  $("update-notice").hidden = false;
+}
+function hideUpdatePrompt() {
+  $("update-prompt").hidden = true;
+}
 $("settings-toggle").addEventListener("click", openSettings);
 $("close-settings").addEventListener("click", () => closeSettings("overview"));
 $("open-diagnostics").addEventListener("click", () => closeSettings("diagnostics"));
 document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("settings-panel").hidden) closeSettings("overview"); });
-$('update-notice').addEventListener('click', openSettings);
+$("update-notice").addEventListener("click", () => { $("update-prompt").hidden = false; });
 $("settings-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const settings = { workspaceRoot: $("workspace").value.trim(), port: Number($("port").value), launchAtLogin: $("launch-at-login").checked, keepRunningOnClose: $("keep-running").checked };
@@ -192,21 +215,27 @@ $("defaults-form").addEventListener("submit", (event) => {
     $("defaults-status").textContent = "Defaults saved.";
   } catch { showError("Could not save defaults in this app. Check that local storage is available."); }
 });
-async function checkUpdate() {
+async function checkUpdate({ silent = false } = {}) {
   $("download-update").hidden = $("install-update").hidden = $("update-confirmation").hidden = true;
-  $('update-details').hidden = true;
+  if (!silent) $("update-details").hidden = true;
   try {
-  const result = await invoke("check_for_update");
-  $("update-status").textContent = result.version ? `${result.message}: ${result.version}` : result.message;
-  $("update-notes").textContent = result.notes || "";
-  $("update-notes").hidden = !result.notes;
-  $("download-update").hidden = !result.version;
-  $('update-notice').hidden = !result.version;
+    const result = await invoke("check_for_update");
+    const version = result.version || null;
+    if (version && deferredUpdateVersion() !== version) showUpdatePrompt(version, result.notes);
+    else if (!version) { $("update-notice").hidden = true; hideUpdatePrompt(); }
+    if (!version || deferredUpdateVersion() !== version) clearDeferredUpdateVersion(version);
+    if (!silent || version) {
+      $("update-status").textContent = version ? `${result.message}: ${version}` : result.message;
+      $("update-notes").textContent = result.notes || "";
+      $("update-notes").hidden = !result.notes;
+      $("download-update").hidden = !version;
+    }
   } catch (error) {
-    $('update-notice').hidden = true;
-    $('update-status').textContent = "Update information isn’t available yet. You can keep using the app and check again later.";
-    $('update-error-detail').textContent = error?.message || String(error);
-    $('update-details').hidden = false;
+    if (silent) return;
+    $("update-notice").hidden = true;
+    $("update-status").textContent = "Update information isn’t available yet. You can keep using the app and check again later.";
+    $("update-error-detail").textContent = error?.message || String(error);
+    $("update-details").hidden = false;
   }
 }
 $("check-update").addEventListener("click", () => action(checkUpdate));
@@ -221,6 +250,21 @@ $("cancel-install").addEventListener("click", () => { $("update-confirmation").h
 $("confirm-install").addEventListener("click", () => action(async () => {
   $("update-confirmation").hidden = true;
   await invoke("install_update", { confirmed: true });
+}));
+$("update-later").addEventListener("click", () => {
+  const match = $("update-prompt-version").textContent?.match(/^Version\s+(.+)$/);
+  deferUpdateVersion(match?.[1] || "");
+  hideUpdatePrompt();
+  $("update-notice").hidden = true;
+});
+$("update-now").addEventListener("click", () => action(async () => {
+  hideUpdatePrompt();
+  openSettings();
+  $("update-status").textContent = "Downloading and verifying update…";
+  await invoke("download_update");
+  $("update-status").textContent = "Verified update ready to install.";
+  $("download-update").hidden = true;
+  $("install-update").hidden = false;
 }));
 if (window.__TAURI__?.event?.listen) {
   void window.__TAURI__.event.listen("desktop-changed", () => { if (busy) refreshPending = true; else void action(async () => render(await invoke("desktop_status"))); });
@@ -271,7 +315,8 @@ window.addEventListener("message", (event) => {
 });
 void action(async () => {
   if (!window.__TAURI__?.core?.invoke) throw new Error("Open this screen from the Sidecar desktop app.");
-  void checkUpdate();
+  void checkUpdate({ silent: true });
+  setInterval(() => { void checkUpdate({ silent: true }); }, periodicUpdateCheckMs);
   const next = await invoke("desktop_status");
   initialSetup = !next.settings.workspaceRoot;
   render(next);
