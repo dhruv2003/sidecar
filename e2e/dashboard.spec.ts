@@ -167,7 +167,10 @@ test.beforeEach(async () => {
 })
 
 test.afterEach(async () => {
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  // Drop idle keep-alive sockets left by the browser so close() cannot hang past the test timeout.
+  const closed = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  server.closeAllConnections()
+  await closed
   await rm(root, { recursive: true, force: true })
 })
 
@@ -489,7 +492,7 @@ test('completed sign-in is muted, survives refresh, and allows an explicit retry
   const login = page.locator('#login-codex')
   await expect(login).toBeDisabled()
   await expect(login).toHaveText('Signed in')
-  await expect(login).toHaveCSS('background-color', 'rgb(243, 240, 232)')
+  await expect(login).toHaveCSS('background-color', 'rgb(228, 246, 238)')
   await expect(page.locator('#login-again')).toBeEnabled()
   await page.reload()
   await expect(login).toBeDisabled()
@@ -502,7 +505,7 @@ test('completed sign-in is muted, survives refresh, and allows an explicit retry
   await page.locator('#login-cancel').click()
   await expect(login).toHaveText('Signed in')
   await page.locator('#theme-dark').click()
-  await expect(login).toHaveCSS('background-color', 'rgb(35, 38, 48)')
+  await expect(login).toHaveCSS('background-color', 'rgb(18, 41, 31)')
   await page.screenshot({path:'output/playwright/dashboard-signed-in-dark.png'})
   await page.locator('#setup-key').selectOption(other.id)
   await expect(login).toBeEnabled()
@@ -793,7 +796,7 @@ test('permanent deletion uses an in-app confirmation, supports cancel and remove
   // Reproduce the embedded WebView: browser confirm cannot be used here.
   await page.addInitScript(() => { window.confirm = () => { throw new Error('Browser confirm is unavailable'); } })
   await page.goto(baseURL + '/#desktopToken=' + 'a'.repeat(64))
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /API Keys/ }).click()
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Keys/ }).click()
   const trigger = page.getByRole('button', { name: 'Permanently delete API key Disposable deletion fixture', exact: true })
   await trigger.click()
   const dialog = page.getByRole('dialog', { name: 'Delete API key permanently?' })

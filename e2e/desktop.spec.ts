@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
     if (!['index.html', 'app.js', 'styles.css', 'branding.css', 'logo.png'].includes(name)) return route.abort()
     await route.fulfill({ body: await readFile(resolve('desktop', name)), contentType: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html' })
   })
-  await page.route('http://127.0.0.1:3081/**', route => route.fulfill({ body: `<!doctype html><style>body{margin:0;background:#f8f6f0}nav{position:fixed;inset:0 auto 0 0;width:224px;background:white}button{display:block;margin:16px}@media(max-width:820px){nav{inset:0 0 auto;width:100%;height:144px}button{display:inline-block}}</style><nav><button data-view="overview">Overview</button><button data-view="diagnostics">Diagnostics</button><button data-view="settings">Settings</button></nav><script>window.received=[];window.addEventListener('message',e=>window.received.push(e.data));document.querySelectorAll('button').forEach(b=>b.onclick=()=>parent.postMessage({type:'codex-desktop-view',view:b.dataset.view},'http://desktop.test'));</script>`, contentType: 'text/html' }))
+  await page.route('http://127.0.0.1:3081/**', route => route.fulfill({ body: `<!doctype html><style>body{margin:0;background:#f8f6f0}nav{position:fixed;inset:0 auto 0 0;width:224px;background:white}button{display:block;margin:16px}@media(max-width:820px){nav{width:68px}}</style><nav><button data-view="overview">Overview</button><button data-view="diagnostics">Diagnostics</button><button data-view="settings">Settings</button></nav><script>window.received=[];window.addEventListener('message',e=>window.received.push(e.data));document.querySelectorAll('button').forEach(b=>b.onclick=()=>parent.postMessage({type:'codex-desktop-view',view:b.dataset.view},'http://desktop.test'));</script>`, contentType: 'text/html' }))
   await page.addInitScript(() => {
     const win = window as any
     win.calls = []
@@ -62,7 +62,7 @@ test('settings and About show the installed app version', async ({ page }) => {
 test('desktop first run saves native settings and starts, restarts and stops gateway', async ({ page }) => {
   await page.goto('http://desktop.test')
   await expect(page.locator('#status')).toHaveText('Gateway stopped')
-  await expect(page.locator('#native-sidebar .brand')).toHaveText('SidecarLocal AI companion')
+  await expect(page.locator('#native-sidebar .brand')).toHaveText('sidecarLocal AI companion')
   await expect(page.getByRole('group',{name:'Appearance'}).getByRole('button').first()).toHaveAccessibleName('Dark theme')
   await page.getByRole('button', { name: 'Choose folder' }).click()
   await expect(page.locator('#workspace')).toHaveValue('/Users/test/Projects')
@@ -78,7 +78,7 @@ test('desktop first run saves native settings and starts, restarts and stops gat
   await expect(page.locator('#settings-panel')).toBeVisible()
   await page.getByRole('button', { name: 'Back to setup' }).click()
   await expect(page.locator('#onboarding')).toBeVisible()
-  await expect(page.getByRole('navigation', { name: 'Setup navigation' }).getByRole('button', { name: 'Overview' })).toBeDisabled()
+  await expect(page.getByRole('navigation', { name: 'Setup navigation' }).getByRole('button', { name: 'Home' })).toBeDisabled()
   expect(await page.evaluate(() => (window as any).calls.filter((call: string) => call !== 'check_for_update'))).toEqual(['desktop_status', 'choose_workspace', 'save_settings', 'start_gateway', 'stop_gateway', 'start_gateway', 'stop_gateway'])
 })
 
@@ -206,7 +206,7 @@ test('connected dashboard fills the window and settings never shrink it', async 
   await expect(drawer).toBeHidden()
   await openSettings(page)
   await page.setViewportSize({width:820,height:700})
-  expect(await drawer.boundingBox()).toEqual({x:0,y:144,width:820,height:556})
+  expect(await drawer.boundingBox()).toEqual({x:68,y:0,width:752,height:700})
   expect(await frame.boundingBox()).toEqual({x:0,y:0,width:820,height:700})
   await page.frameLocator('#dashboard').getByRole('button', { name: 'Diagnostics', exact: true }).click()
   await expect(drawer).toBeHidden()
@@ -217,7 +217,7 @@ test('native theme persists and synchronizes on ready without echoing dashboard 
   await page.goto('http://desktop.test')
   await page.getByRole('button', { name: 'Dark theme', exact: true }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(17, 19, 24)')
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(11, 13, 18)')
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await page.locator('#workspace').fill('/Users/test/Projects')
@@ -242,8 +242,8 @@ test('native theme persists and synchronizes on ready without echoing dashboard 
   expect(await frame.evaluate(() => (window as any).received.filter((v: any) => v.type === 'codex-desktop-theme'))).toHaveLength(1)
   await dashboardMessage(page, { type: 'codex-desktop-theme', theme: 'dark' })
   await openSettings(page)
-  await expect(page.locator('#settings-panel')).toHaveCSS('background-color', 'rgb(17, 19, 24)')
-  await expect(page.locator('#settings-form')).toHaveCSS('background-color', 'rgb(25, 28, 35)')
+  await expect(page.locator('#settings-panel')).toHaveCSS('background-color', 'rgb(11, 13, 18)')
+  await expect(page.locator('#settings-form')).toHaveCSS('background-color', 'rgb(18, 21, 28)')
   await page.screenshot({path:'output/playwright/native-settings-dark.png'})
 })
 
@@ -298,7 +298,7 @@ test('settings messages reject wrong source, origin, and payload; native routes 
   await dashboardMessage(page,{type:'codex-desktop-view',view:'not-a-view'})
   await dashboardMessage(page,{type:'codex-desktop-view',view:'overview',extra:true})
   await expect(page.locator('#settings-panel')).toBeVisible()
-  await page.getByRole('button',{name:'Open Diagnostics →'}).click()
+  await page.getByRole('button',{name:'Open Health →'}).click()
   await expect(page.locator('#settings-panel')).toBeHidden()
   await expect.poll(()=>frame.evaluate(()=>(window as any).received.at(-1))).toEqual({type:'codex-desktop-navigate',view:'diagnostics'})
   await openSettings(page)
