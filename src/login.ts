@@ -22,7 +22,7 @@ interface Attempt {
 /** Device login output is transient. Only the official URL and user code leave this class. */
 export class CodexLoginManager {
   private readonly attempts = new Map<string, Attempt>()
-  constructor(private readonly config: AppConfig) {}
+  constructor(private readonly config: AppConfig, private readonly onSuccess?: (keyId: string) => void) {}
 
   get hasRunningLogin(): boolean { return [...this.attempts.values()].some(attempt => !attempt.closed) }
 
@@ -77,6 +77,7 @@ export class CodexLoginManager {
         attempt.state = code === 0
           ? { status: 'success', message: 'Codex sign-in completed. Test the connection next.' }
           : { status: 'failed', message: 'Sign-in did not finish. Retry, enable device-code login in your account settings if needed, or use the terminal command below.' }
+        if (code === 0) this.onSuccess?.(keyId)
       })
       attempt.timer = setTimeout(() => {
         attempt.state = { status: 'failed', message: 'Sign-in expired. Start again to get a new code.' }

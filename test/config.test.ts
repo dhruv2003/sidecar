@@ -19,6 +19,15 @@ describe('configuration', () => {
     expect(config.modelEfforts['gpt-6-luna']).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
+  it('includes GPT-6.1 and GPT-6.2 models in the default selectable model catalog', () => {
+    const config = loadConfig({})
+    const added = ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol']
+
+    expect(config.models).toEqual(expect.arrayContaining(added))
+    expect(config.imageModels).toEqual(expect.arrayContaining(added))
+    for (const model of added) expect(config.modelEfforts[model]).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+  })
+
   it('gives custom enabled models the default reasoning efforts', () => {
     const config = loadConfig({ CODEX_MODELS: 'custom-model' })
 

@@ -2,9 +2,12 @@ import { mkdir, realpath } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { isInsideWorkspace } from './security.js'
 
-const defaultModels = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini']
+// Fallback only: at startup the list is replaced by the Codex CLI's own catalog (see model-catalog.ts).
+// Mirrors the catalog bundled with the pinned @openai/codex version.
+const defaultModels = ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']
 const defaultImageModels = [...defaultModels]
 const defaultEfforts = ['low', 'medium', 'high', 'xhigh', 'max']
+const ultraModels = new Set(['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.6-terra'])
 
 export interface AppConfig {
   publicDirectory?: string
@@ -18,6 +21,8 @@ export interface AppConfig {
   models: string[]
   imageModels: string[]
   modelEfforts: Record<string, string[]>
+  /** Model settings pinned by environment variables; the discovered catalog never replaces these. */
+  modelOverrides?: { models?: boolean; imageModels?: boolean; modelEfforts?: boolean }
   maxConcurrent?: number
   maxConcurrentPerKey?: number
   maxQueue?: number
@@ -37,7 +42,7 @@ function numberEnv(value: string | undefined, fallback: number): number {
 
 function modelEfforts(value: string | undefined, models: string[]): Record<string, string[]> {
   if (value === undefined) return Object.fromEntries(models.map(model => [model,
-    model === 'gpt-6-astra' || model === 'gpt-6-sol' || model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' ? [...defaultEfforts, 'ultra']
+    ultraModels.has(model) ? [...defaultEfforts, 'ultra']
       : model === 'gpt-6-luna' || model === 'gpt-5.6-luna' ? defaultEfforts
         : defaultEfforts.slice(0, 4),
   ]))
@@ -65,6 +70,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     models,
     imageModels: csv(env.CODEX_IMAGE_MODELS, defaultImageModels).filter(model => models.includes(model)),
     modelEfforts: modelEfforts(env.CODEX_MODEL_EFFORTS, models),
+    modelOverrides: {
+      models: csv(env.CODEX_MODELS, []).length > 0,
+      imageModels: csv(env.CODEX_IMAGE_MODELS, []).length > 0,
+      modelEfforts: env.CODEX_MODEL_EFFORTS !== undefined,
+    },
     maxConcurrent: numberEnv(env.CODEX_MAX_CONCURRENT, 2),
     maxConcurrentPerKey: numberEnv(env.CODEX_MAX_CONCURRENT_PER_KEY, 1),
     maxQueue: numberEnv(env.CODEX_MAX_QUEUE, 20),
