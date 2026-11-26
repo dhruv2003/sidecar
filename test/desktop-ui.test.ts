@@ -26,6 +26,6 @@ describe('Stitch native desktop shell contract', () => {
     expect(branding).toContain('#settings-panel {')
     expect(branding).toContain('position: fixed;')
     expect(branding).toContain('inset: 0 0 0 224px;')
-    expect(branding).toContain('inset: 144px 0 0 0;')
+    expect(branding).toContain('inset: 0 0 0 68px;')
   })
 })

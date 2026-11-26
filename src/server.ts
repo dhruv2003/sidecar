@@ -60,7 +60,7 @@ export function createApp(overrides: Partial<Dependencies> = {}) {
       }
       // Assets contain no credentials. All other admin paths require the per-launch capability.
       const adminPath = request.path.toLowerCase()
-      const isAsset = request.method === 'GET' && ['/admin/app.js', '/admin/styles.css', '/admin/logo.png'].includes(request.path)
+      const isAsset = request.method === 'GET' && ['/admin/app.js', '/admin/styles.css', '/admin/logo.png', '/admin/fonts/geist.woff2', '/admin/fonts/geist-mono.woff2'].includes(request.path)
       if (adminPath.startsWith('/admin') && !isAsset) {
         const actual = Buffer.from(request.get('X-Codex-Desktop-Token') ?? '')
         if (actual.length !== expectedToken.length || !timingSafeEqual(actual, expectedToken)) {

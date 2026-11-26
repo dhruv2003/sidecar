@@ -58,6 +58,7 @@ const elements = {
 function setStatus(message, isError = false) {
   elements.status.textContent = message;
   elements.status.classList.toggle("error", isError);
+  elements.status.classList.toggle("loading", !isError && message.endsWith("…"));
 }
 
 function readPreferences(value) {
@@ -66,7 +67,7 @@ function readPreferences(value) {
     view: views.has(value.view) ? value.view : "overview",
     keyId: typeof value.keyId === "string" && /^key_[a-zA-Z0-9_-]{1,80}$/.test(value.keyId) ? value.keyId : "",
     model: catalogId(value.model) ? value.model : "",
-    reasoning: ["", "none", "minimal", "low", "medium", "high", "xhigh"].includes(value.reasoning) ? value.reasoning : "",
+    reasoning: typeof value.reasoning === "string" && /^[a-z]{0,32}$/.test(value.reasoning) ? value.reasoning : "",
     step: Number.isInteger(value.step) && value.step >= 1 && value.step <= 4 ? value.step : 1,
   };
 }
@@ -114,7 +115,7 @@ function sendCatalog() {
     if (!catalogId(model.id) || seen.has(model.id)) return false;
     seen.add(model.id); return true;
   }).slice(0,200).map(model => ({
-    id:model.id, efforts:[...new Set((Array.isArray(model.efforts) ? model.efforts : []).filter(effort => ["none", "minimal", "low", "medium", "high", "xhigh"].includes(effort)))],
+    id:model.id, efforts:[...new Set((Array.isArray(model.efforts) ? model.efforts : []).filter(effort => typeof effort === "string" && /^[a-z]{1,32}$/.test(effort)))],
   }))});
 }
 
@@ -152,11 +153,11 @@ function showView(view = "overview", {replace = false, restore = false, notify =
   });
   document.body.dataset.view = currentView;
   const labels = {
-    overview:["Overview", "Gateway health, setup progress, and recent activity."],
-    "api-keys":["API keys", "Create and manage access to your workspaces."],
-    connect:["Connect", "Sign in, test your selected key, and configure your client."],
-    requests:["Requests", "Recent request metadata, kept in gateway memory."],
-    diagnostics:["Diagnostics", "Check local gateway health without using model quota."],
+    overview:["Home", "Your local gateway at a glance."],
+    "api-keys":["Keys", "Scoped access to your project folders."],
+    connect:["Connect", "Sign in, test, and plug Sidecar into your tools."],
+    requests:["Activity", "Recent request metadata, kept in gateway memory."],
+    diagnostics:["Health", "Local checks that never use model quota."],
     settings:["Settings", "Review workspace and gateway configuration."],
     onboarding:["Set up your gateway", "Workspace → Create key → Sign in → Test connection."],
   };
@@ -177,6 +178,7 @@ function showView(view = "overview", {replace = false, restore = false, notify =
   if (currentView === "requests") { renderHistoryRows(); void loadHistory(); }
   if (currentView === "onboarding") renderWizard();
   if (currentView === "diagnostics") renderHealth();
+  if (currentView === "connect") requestAnimationFrame(moveTabIndicator);
   const main = document.querySelector(".app-main");
   if (main) main.scrollTop = 0;
   const title = $("page-title") || document.querySelector(`[data-view-panel="${currentView}"] h2`);
@@ -394,6 +396,8 @@ function renderSetup() {
   $("setup-progress").textContent = key ? progressText(key) : "Create a key to begin.";
   if (!pendingTests.has(setupKeyId)) $("test-result").textContent = testErrors.get(setupKeyId) || (selectedSetup()?.lastTest ? testSummary(selectedSetup().lastTest) : "No connection test recorded for this key. Run a small model request to verify it; this uses your account's quota.");
   else $("test-result").textContent = "Testing… This may take a minute.";
+  const lastTest = selectedSetup()?.lastTest;
+  $("test-result").dataset.tone = pendingTests.has(setupKeyId) ? "busy" : testErrors.has(setupKeyId) || lastTest?.ok === false ? "bad" : lastTest?.ok ? "ok" : "";
   renderKeyDetail(key);
   renderWizard();
   if (!adminConfig) {
@@ -490,7 +494,7 @@ async function deviceLogin(method = "POST") {
       const pending = state.status === "starting" || state.status === "waiting";
       $("login-cancel").hidden = !pending;
       if (pending) loginTimer = setTimeout(() => update("GET"), 2000);
-      else { pendingLoginKey = undefined; renderSetup(); if (state.status === "success") await refreshDashboard(); }
+      else { pendingLoginKey = undefined; renderSetup(); if (state.status === "success") { toast("Signed in to Codex."); await refreshDashboard(); } }
     } catch (error) { if (generation === loginGeneration) { pendingLoginKey = undefined; $("login-status").textContent = "Sign-in failed: " + error.message + (desktopToken ? ". Retry Sign in to Codex when ready." : ". You can use the terminal command below."); renderSetup(); $("login-cancel").hidden = true; } }
   }
   await update(method);
@@ -532,6 +536,7 @@ function renderEfforts() {
   const model = setupData.models.find((entry) => entry.id === $("setup-model").value);
   $("setup-reasoning").replaceChildren(new Option("Model default", ""), ...(model?.efforts || []).map((effort) => new Option(effort, effort)));
   if ((model?.efforts || []).includes(selected)) $("setup-reasoning").value = selected;
+  renderModelCaps(model);
   renderSetup();
 }
 
@@ -548,13 +553,15 @@ async function testConnection(id = setupKeyId, button = $("test-connection")) {
   testErrors.delete(id);
   renderWizard();
   button.disabled = true;
-  $("test-result").textContent = "Testing… This may take a minute.";
+  $("test-result").textContent = "Testing… This may take a minute."; $("test-result").dataset.tone = "busy";
   try {
     const result = await api("/" + encodeURIComponent(id) + "/test", {method:"POST",body:JSON.stringify({model, reasoningEffort:$("setup-reasoning").value || undefined})});
     if (id === setupKeyId) $("test-result").textContent = testSummary(result);
+    toast(result.ok ? `Test passed · ${result.model || model}` : `Test failed · ${result.message || "see Connect"}`, result.ok ? "ok" : "bad");
     await refreshDashboard();
   } catch (error) {
     testErrors.set(id, `Test request failed · ${model} · ${formatDate(new Date().toISOString())} · ${error.message}`);
+    toast(`Test failed: ${error.message}`, "bad");
     await refreshDashboard();
     const recorded = setupData.keys.find(key => key.id === id)?.lastTest;
     if (recorded?.ok === false && recorded.model === model && Date.parse(recorded.testedAt) >= startedAt) testErrors.delete(id);
@@ -706,8 +713,12 @@ function renderOverview() {
       setupLoaded ? `${auth} keys with credentials found` : "Authentication status unavailable",
       setupLoaded ? `${passed} keys with a passing last connection test` : "Connection test status unavailable",
       healthData?.checkedAt ? "Health checked " + formatDate(healthData.checkedAt) : "Refresh to check local health",
-    ].map(text => { const row = document.createElement("p"); row.textContent = text; return row; }));
+    ].map((text, index) => { const row = document.createElement("p"); row.textContent = text;
+      row.dataset.tone = index === 0 ? (gateway ? gateway.ready ? "ok" : "bad" : "warn") : index === 1 ? (auth ? "ok" : "warn") : index === 2 ? (passed ? "ok" : "warn") : ""; return row; }));
   }
+  renderHero(); renderSparkline();
+  if ($("nav-key-count")) $("nav-key-count").textContent = keysLoaded && dashboardKeys.length ? String(dashboardKeys.length) : "";
+  if ($("nav-request-count")) $("nav-request-count").textContent = requestHistory.length ? String(requestHistory.length) : "";
   const recent = $("overview-history"); if (!recent) return;
   recent.replaceChildren();
   const items = [...requestHistory].sort((a,b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0)).slice(0,5);
@@ -790,6 +801,7 @@ async function checkHealth() {
     // Memory only, bounded, with no paths, key identifiers, account hints or errors.
     diagnosticRuns.unshift({checkedAt:result.checkedAt, available:true, ready:result.gateway?.ready === true});
     setStatus("Local health check completed. Connection tests are separate.");
+    toast(result.gateway?.ready ? "Health check passed." : "Health check finished. Some checks need attention.", result.gateway?.ready ? "ok" : "bad");
   } catch {
     if (generation !== healthGeneration) return;
     healthData = undefined;
@@ -853,6 +865,7 @@ function renderKeyDetail(key) {
   const expired = isExpired(key.expiresAt);
   const status = expired ? "Expired" : key.active ? "Active" : "Inactive";
   name.textContent = key.name || key.id;
+  $("detail-key-steps")?.replaceChildren(keySteps(key));
   state.textContent = status;
   state.className = `pill${key.active && !expired ? "" : " inactive"}`;
   $("detail-key-scope").textContent = key.workspaceRoot || adminConfig?.workspaceRoot || "—";
@@ -863,7 +876,7 @@ function renderKeyDetail(key) {
   $("detail-key-last-test").textContent = testErrors.get(key.id) || (setup?.lastTest ? testSummary(setup.lastTest) : "Not tested yet");
 }
 
-function metric(id, value) { document.querySelector(id).textContent = Number(value || 0).toLocaleString(); }
+function metric(id, value) { countTo(document.querySelector(id), Number(value || 0)); }
 
 function renderMetrics(metrics) {
   const keys = metrics.keys || {};
@@ -874,12 +887,15 @@ function renderMetrics(metrics) {
   metric("#metric-tokens", Number(keys.inputTokens || 0) + Number(keys.outputTokens || 0));
   metric("#metric-capacity-active", capacity.active);
   metric("#metric-capacity-queued", capacity.queued);
+  const active = Number(capacity.active || 0), queued = Number(capacity.queued || 0);
+  if ($("capacity-fill")) $("capacity-fill").style.width = `${Math.min(100, (active + queued) ? Math.max(8, active / Math.max(1, active + queued) * 100) : 0)}%`;
   elements.overview.removeAttribute("data-state");
   elements.overview.setAttribute("aria-label", "Service overview");
 }
 
 function unavailableMetrics() {
   ["#metric-total-keys", "#metric-active-keys", "#metric-requests", "#metric-tokens", "#metric-capacity-active", "#metric-capacity-queued"].forEach((id) => {
+    cancelCount(document.querySelector(id)); delete document.querySelector(id).dataset.value;
     document.querySelector(id).textContent = "Unavailable";
   });
   elements.overview.dataset.state = "unavailable";
@@ -916,8 +932,8 @@ function renderKeys(keys) {
   });
   if (!keys.length) { renderMessage('No keys match your search and status filter.', 'empty'); renderKeyDetail(selectedKey()); return; }
   const fragment = document.createDocumentFragment();
-  keys.forEach((key) => {
-    const card = document.createElement("article"); card.className = "key-card"; card.dataset.keyId = key.id;
+  keys.forEach((key, index) => {
+    const card = document.createElement("article"); card.className = "key-card"; card.dataset.keyId = key.id; card.style.setProperty("--i", String(Math.min(index, 8)));
     card.dataset.selected = String(key.id === setupKeyId);
     card.classList.toggle("selected", key.id === setupKeyId);
     const details = document.createElement("div");
@@ -925,15 +941,20 @@ function renderKeys(keys) {
     const expired = isExpired(key.expiresAt);
     const state = document.createElement("span"); state.className = `pill${key.active && !expired ? "" : " inactive"}`;
     state.textContent = expired ? "Expired" : key.active ? "Active" : "Inactive";
-    name.append(" ", state); details.append(name);
-    appendMeta(details, `ID: ${key.id || "—"} · Created ${formatDate(key.createdAt)}`);
-    appendMeta(details, `Workspace: ${key.workspaceRoot || adminConfig?.workspaceRoot || "—"}`);
-    appendMeta(details, `RPM ${key.requestsPerMinute || 60} · ${key.requestCount || 0} requests · ${key.failureCount || 0} failures · ${Number(key.inputTokens || 0) + Number(key.outputTokens || 0)} tokens`);
-    appendMeta(details, `Last used ${formatDate(key.lastUsedAt)} · Expires ${key.expiresAt ? formatDate(key.expiresAt) : "Never"}`);
-    appendMeta(details, key.allowedOrigins?.length ? `Browser origins: ${key.allowedOrigins.join(", ")}` : "Cross-origin browser access disabled");
-    appendMeta(details, progressText(key));
+    name.append(" ", state);
+    const head = document.createElement("div"); head.className = "key-head"; head.append(name, keySteps(key));
+    details.append(head);
+    const metaGrid = document.createElement("div"); metaGrid.className = "key-meta";
+    appendMeta(metaGrid, `${key.id || "—"} · Created ${formatDate(key.createdAt)}`);
+    appendMeta(metaGrid, `Workspace: ${key.workspaceRoot || adminConfig?.workspaceRoot || "—"}`);
+    appendMeta(metaGrid, `RPM ${key.requestsPerMinute || 60} · ${(key.requestCount || 0).toLocaleString()} requests · ${key.failureCount || 0} failures · ${(Number(key.inputTokens || 0) + Number(key.outputTokens || 0)).toLocaleString()} tokens`);
+    appendMeta(metaGrid, `Last used ${formatDate(key.lastUsedAt)} · Expires ${key.expiresAt ? formatDate(key.expiresAt) : "Never"}`);
+    appendMeta(metaGrid, key.allowedOrigins?.length ? `Browser origins: ${key.allowedOrigins.join(", ")}` : "Cross-origin browser access disabled");
     const account = healthData?.keys?.find(entry => entry.id === key.id)?.account;
-    appendMeta(details, account?.email ? `Account hint (unverified): ${account.email}` : 'Codex account: identity unavailable; use sign-in to select your account.');
+    if (account?.email) appendMeta(metaGrid, `Account hint (unverified): ${account.email}`);
+    const lastTest = setupData.keys.find(entry => entry.id === key.id)?.lastTest;
+    if (testErrors.has(key.id) || lastTest?.ok === false) { appendMeta(metaGrid, progressText(key)); metaGrid.lastElementChild.classList.add("meta-alert"); }
+    details.append(metaGrid);
 
     const stateButton = document.createElement("button"); stateButton.className = "secondary"; stateButton.type = "button";
     stateButton.textContent = key.active ? "Deactivate" : "Activate";
@@ -1028,7 +1049,7 @@ async function refreshDashboard() {
 async function setKeyState(id, active, button) {
   if (!id) return;
   button.disabled = true;
-  try { await api(`/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ active }) }); await refreshDashboard(); }
+  try { await api(`/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ active }) }); toast(active ? "Key activated." : "Key deactivated."); await refreshDashboard(); }
   catch (error) { setStatus(error.message, true); button.disabled = false; }
 }
 
@@ -1036,7 +1057,7 @@ async function updateKeyPolicy(id, policy, button, errorElement) {
   if (!id) return;
   if (errorElement) errorElement.hidden = true;
   button.disabled = true;
-  try { await api(`/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(policy) }); await refreshDashboard(); }
+  try { await api(`/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(policy) }); toast("Policy saved."); await refreshDashboard(); }
   catch (error) {
     setStatus(error.message, true); button.disabled = false;
     if (errorElement) { errorElement.textContent = error.message; errorElement.hidden = false; }
@@ -1066,15 +1087,251 @@ async function deleteKey(key, button) {
       clearLogin();
       setupKey = "YOUR_KEY"; setupKeyId = "key_REPLACE_WITH_ID"; elements.secret.textContent = ""; elements.secretPanel.hidden = true; renderSetup();
     }
-    setStatus(`Deleted ${label} permanently.`); await refreshDashboard();
+    setStatus(`Deleted ${label} permanently.`); toast(`Deleted ${label}.`); await refreshDashboard();
   } catch (error) { setStatus(error.message, true); button.disabled = false; }
 }
 
 async function copyText(id, button) {
   const value = document.getElementById(id).textContent;
-  try { await navigator.clipboard.writeText(value); button.textContent = "Copied"; }
-  catch { setStatus("Clipboard access was blocked. Select and copy the text manually.", true); return; }
-  setTimeout(() => { button.textContent = "Copy"; }, 1500);
+  const label = button.textContent;
+  try { await navigator.clipboard.writeText(value); button.textContent = "Copied"; button.classList.add("copied"); }
+  catch { setStatus("Clipboard access was blocked. Select and copy the text manually.", true); toast("Clipboard access was blocked. Select the text and copy it manually.", "bad"); return; }
+  toast(copyMessages[id] || "Copied to clipboard.");
+  setTimeout(() => { button.textContent = label === "Copied" ? "Copy" : label; button.classList.remove("copied"); }, 1500);
+}
+
+
+// ---------- Motion & feedback helpers ----------
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const counters = new WeakMap();
+const copyMessages = {"vscode-example":"VS Code settings copied. Paste them into Manage Models → Custom Endpoint.", "curl-example":"Terminal command copied.", "browser-example":"Browser snippet copied.", "base-url":"Endpoint copied.", "new-secret":"Secret copied. Store it somewhere safe.", "login-code":"Sign-in code copied.", "login-example":"Sign-in commands copied.", "diagnostic-report":"Diagnostic report copied.", "tunnel-example":"Tunnel configuration copied."};
+const toastIcons = {ok:"M5 12.5l4.5 4.5L19 7.5", bad:"M12 7v6m0 4h.01"};
+
+function svgNode(tag, attributes = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, String(value));
+  return node;
+}
+
+function iconNode(id) { const svg = svgNode("svg", {class:"icon", "aria-hidden":"true"}); svg.append(svgNode("use", {href:`#${id}`})); return svg; }
+
+function toast(message, tone = "ok") {
+  const region = $("toasts"); if (!region) return;
+  const item = document.createElement("div"); item.className = "toast"; item.dataset.tone = tone;
+  const duration = tone === "bad" ? 6000 : 3200; item.style.setProperty("--toast-ms", duration + "ms");
+  const icon = document.createElement("span"); icon.className = "toast-icon";
+  const glyph = svgNode("svg", {viewBox:"0 0 24 24", "aria-hidden":"true"}); glyph.append(svgNode("path", {d:toastIcons[tone] || toastIcons.ok})); icon.append(glyph);
+  const text = document.createElement("span"); text.textContent = message;
+  item.append(icon, text); region.append(item);
+  while (region.children.length > 3) region.firstElementChild.remove();
+  const remove = () => { item.classList.add("leaving"); setTimeout(() => item.remove(), reduceMotion.matches ? 0 : 260); };
+  let timer = setTimeout(remove, duration);
+  item.addEventListener("mouseenter", () => clearTimeout(timer));
+  item.addEventListener("mouseleave", () => { timer = setTimeout(remove, 1200); });
+}
+
+function cancelCount(element) { const frame = counters.get(element); if (frame) cancelAnimationFrame(frame); counters.delete(element); }
+
+function countTo(element, target) {
+  if (!element) return;
+  cancelCount(element);
+  const start = Number(element.dataset.value || 0);
+  element.dataset.value = String(target);
+  if (reduceMotion.matches || start === target || !Number.isFinite(start)) { element.textContent = target.toLocaleString(); return; }
+  const began = performance.now(), duration = 650;
+  const step = (now) => {
+    const progress = Math.min(1, (now - began) / duration), eased = 1 - Math.pow(1 - progress, 3);
+    element.textContent = Math.round(start + (target - start) * eased).toLocaleString();
+    if (progress < 1) counters.set(element, requestAnimationFrame(step)); else counters.delete(element);
+  };
+  counters.set(element, requestAnimationFrame(step));
+}
+
+function keyProgress(key) {
+  const setup = setupData.keys.find(entry => entry.id === key.id);
+  const usable = key.active && !isExpired(key.expiresAt);
+  const signedIn = setup?.authStatus === "credentials_found";
+  const tested = Boolean(setup?.lastTest?.ok);
+  const states = [usable, usable && signedIn, usable && signedIn && tested];
+  const label = !usable ? (key.active ? "Expired" : "Deactivated") : !signedIn ? "Next: sign in to Codex" : !tested ? "Next: test the connection" : "Ready";
+  return {states, label};
+}
+
+function keySteps(key) {
+  const {states, label} = keyProgress(key);
+  const wrap = document.createElement("div"); wrap.className = "key-progress";
+  const steps = document.createElement("div"); steps.className = "key-steps"; steps.setAttribute("aria-hidden", "true");
+  const firstOpen = states.indexOf(false);
+  states.forEach((done, index) => { const segment = document.createElement("i"); segment.dataset.state = done ? "done" : index === firstOpen && states[0] !== false ? "next" : "todo"; steps.append(segment); });
+  const text = document.createElement("span"); text.className = "key-steps-label"; text.textContent = label;
+  wrap.append(steps, text);
+  return wrap;
+}
+
+function renderModelCaps(model) {
+  const target = $("model-caps"); if (!target) return;
+  if (!model) { target.replaceChildren(); return; }
+  const chips = [];
+  const chip = (label, value) => { const item = document.createElement("span"); item.className = "cap"; item.append(label); if (value) { const strong = document.createElement("b"); strong.textContent = value; item.append(" ", strong); } chips.push(item); };
+  const efforts = model.efforts || [];
+  if (efforts.length) chip("Reasoning", efforts.length > 1 ? `${efforts[0]} → ${efforts.at(-1)}` : efforts[0]);
+  chip((model.inputModalities || []).includes("image") ? "Text + images" : "Text only");
+  if (adminConfig?.defaultModel === model.id) chip("Gateway default");
+  target.replaceChildren(...chips);
+}
+
+let heroAction = () => showView("onboarding");
+function renderHero() {
+  const orb = $("home-orb"), headline = $("home-headline"), detail = $("home-detail"), primary = $("home-primary");
+  if (!orb || !headline || !detail || !primary) return;
+  const gateway = healthData?.gateway;
+  const keyName = (key) => key.name || key.id;
+  const usable = dashboardKeys.filter(key => key.active && !isExpired(key.expiresAt));
+  const ready = usable.filter(key => keyProgress(key).states[2]);
+  const unsigned = usable.find(key => !keyProgress(key).states[1]);
+  const untested = usable.find(key => keyProgress(key).states[1] && !keyProgress(key).states[2]);
+  const requests = Number($("metric-requests")?.dataset.value || 0);
+  let state, eyebrow, title, text, action, label;
+  if (!healthData && !keysLoaded) { state = "unknown"; eyebrow = "Gateway"; title = "Checking your gateway…"; text = "Reading local health and key status."; action = () => void refreshDashboard(); label = "Refresh"; }
+  else if (!gateway) { state = "failed"; eyebrow = "Gateway"; title = "Sidecar can’t read its local health."; text = "Refresh to try again, or open Health for details."; action = () => showView("diagnostics"); label = "Open Health"; }
+  else if (!gateway.ready || gateway.workspaceAccessible === false) { state = "attention"; eyebrow = "Needs attention"; title = gateway.workspaceAccessible === false ? "Your workspace folder isn’t reachable." : "The gateway isn’t ready yet."; text = "Open Health to see which check failed and how to fix it."; action = () => showView("diagnostics"); label = "Open Health"; }
+  else if (!dashboardKeys.length) { state = "setup"; eyebrow = "Step 2 of 4"; title = "Create your first API key."; text = "A key gives one project folder access to Sidecar. You’ll sign in to Codex for it next."; action = openCreate; label = "Create a key"; }
+  else if (!usable.length) { state = "attention"; eyebrow = "No active keys"; title = "All your keys are deactivated or expired."; text = "Activate a key or create a new one to keep using Sidecar."; action = () => showView("api-keys"); label = "Open Keys"; }
+  else if (ready.length) { state = "ready"; eyebrow = "All set"; title = ready.length === 1 ? `${keyName(ready[0])} is ready to use.` : `${ready.length} keys are ready to use.`; text = `${requests.toLocaleString()} ${requests === 1 ? "request" : "requests"} answered from your own Codex account${unsigned || untested ? `. ${keyName(unsigned || untested)} still needs setup.` : "."}`; action = () => showView("connect"); label = "Connect an app"; }
+  else if (unsigned) { state = "setup"; eyebrow = "Step 3 of 4"; title = `Sign in to Codex for ${keyName(unsigned)}.`; text = "Each key uses its own Codex account. Sign-in takes about a minute in your browser."; action = () => { selectKey(unsigned.id); showView("connect"); }; label = "Sign in"; }
+  else { state = "setup"; eyebrow = "Step 4 of 4"; title = `Send a test request with ${keyName(untested)}.`; text = "One small request proves the sign-in works. It uses a little of your account’s quota."; action = () => { selectKey(untested.id); showView("connect"); }; label = "Test connection"; }
+  if (orb.dataset.state !== state) orb.dataset.state = state;
+  $("home-eyebrow").textContent = eyebrow; headline.textContent = title; detail.textContent = text;
+  primary.firstChild.textContent = label; heroAction = action;
+}
+
+function renderSparkline() {
+  const svg = $("request-spark"); if (!svg) return;
+  const times = requestHistory.map(item => Date.parse(item.timestamp)).filter(Number.isFinite);
+  const buckets = new Array(14).fill(0), now = Date.now();
+  const span = Math.max(30 * 60_000, now - (times.length ? Math.min(...times) : now));
+  for (const time of times) buckets[Math.min(13, Math.max(0, Math.floor((time - (now - span)) / span * 14)))]++;
+  const max = Math.max(1, ...buckets);
+  const points = buckets.map((value, index) => [index / 13 * 120, 29 - value / max * 26]);
+  const line = points.map(([x, y], index) => `${index ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+  const signature = buckets.join(",");
+  if (svg.dataset.signature === signature) return;
+  svg.dataset.signature = signature;
+  const [lastX, lastY] = points.at(-1);
+  svg.replaceChildren(svgNode("path", {class:"area", d:`${line} L120 32 L0 32Z`}), svgNode("path", {class:"line", d:line}), svgNode("circle", {class:"dot", cx:lastX, cy:lastY, r:2.2}));
+}
+
+// ---------- Client tabs ----------
+function moveTabIndicator() {
+  const selected = document.querySelector('.tabs [role="tab"][aria-selected="true"]'), indicator = document.querySelector(".tab-indicator");
+  if (!selected || !indicator || !selected.offsetWidth) return;
+  indicator.style.width = selected.offsetWidth + "px";
+  indicator.style.transform = `translateX(${selected.offsetLeft}px)`;
+}
+
+function selectTab(tab, focus = false) {
+  const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+  for (const entry of tabs) {
+    const selected = entry === tab;
+    entry.setAttribute("aria-selected", String(selected)); entry.tabIndex = selected ? 0 : -1;
+    const pane = $(entry.getAttribute("aria-controls")); if (pane) pane.hidden = !selected;
+  }
+  if (focus) tab.focus();
+  moveTabIndicator();
+}
+
+function bindTabs() {
+  const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => selectTab(tab));
+    tab.addEventListener("keydown", event => {
+      const next = event.key === "ArrowRight" ? tabs[(index + 1) % tabs.length] : event.key === "ArrowLeft" ? tabs[(index - 1 + tabs.length) % tabs.length] : event.key === "Home" ? tabs[0] : event.key === "End" ? tabs.at(-1) : null;
+      if (next) { event.preventDefault(); selectTab(next, true); }
+    });
+  });
+  window.addEventListener("resize", moveTabIndicator);
+  requestAnimationFrame(moveTabIndicator);
+}
+
+// ---------- Command palette & shortcuts ----------
+let paletteItems = [], paletteIndex = 0;
+function paletteCommands() {
+  const go = (view, label, icon, hint) => ({label, icon, hint, run:() => showView(view)});
+  const commands = [
+    go("overview", "Go to Home", "i-home", "G H"), go("api-keys", "Go to Keys", "i-keys", "G K"), go("connect", "Go to Connect", "i-connect", "G C"),
+    go("requests", "Go to Activity", "i-activity", "G A"), go("diagnostics", "Go to Health", "i-health", "G D"), go("settings", "Go to Settings", "i-settings", "G S"),
+    {label:"Create a new API key", icon:"i-plus", hint:"N", run:openCreate},
+    {label:"Start guided setup", icon:"i-arrow", run:() => showView("onboarding")},
+    {label:"Copy VS Code configuration", icon:"i-copy", run:() => { showView("connect"); selectTab($("tab-vscode")); $("pane-vscode").querySelector("[data-copy]").click(); }},
+    {label:"Copy endpoint URL", icon:"i-copy", run:() => { showView("connect"); selectTab($("tab-endpoint")); $("pane-endpoint").querySelector("[data-copy]").click(); }},
+    {label:"Test the selected key", icon:"i-check", run:() => { showView("connect"); if (!$("test-connection").disabled) void testConnection(); }},
+    {label:"Run a health check", icon:"i-health", run:() => { showView("diagnostics"); void checkHealth(); }},
+    {label:"Refresh dashboard", icon:"i-refresh", run:() => { void loadConfig(); void refreshDashboard(); }},
+    {label:`Switch to ${document.documentElement.dataset.theme === "dark" ? "light" : "dark"} theme`, icon:document.documentElement.dataset.theme === "dark" ? "i-sun" : "i-moon", run:() => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark")},
+  ];
+  for (const key of dashboardKeys) commands.push({label:`Open key: ${key.name || key.id}`, icon:"i-keys", hint:key.id.slice(0, 12), run:() => { selectKey(key.id); showView("connect"); }});
+  return commands;
+}
+
+function renderPalette() {
+  const query = $("palette-input").value.trim().toLocaleLowerCase();
+  paletteItems = paletteCommands().filter(command => !query || command.label.toLocaleLowerCase().includes(query) || query.split(/\s+/).every(word => command.label.toLocaleLowerCase().includes(word)));
+  paletteIndex = Math.min(paletteIndex, Math.max(0, paletteItems.length - 1));
+  const list = $("palette-list");
+  if (!paletteItems.length) { const empty = document.createElement("li"); empty.className = "palette-empty"; empty.textContent = "No matching commands."; list.replaceChildren(empty); return; }
+  list.replaceChildren(...paletteItems.map((command, index) => {
+    const item = document.createElement("li"); item.setAttribute("role", "option"); item.id = `palette-option-${index}`;
+    item.setAttribute("aria-selected", String(index === paletteIndex)); item.style.animationDelay = `${Math.min(index, 10) * 12}ms`;
+    item.append(iconNode(command.icon));
+    const label = document.createElement("span"); label.textContent = command.label; item.append(label);
+    if (command.hint) { const hint = document.createElement("small"); hint.textContent = command.hint; item.append(hint); }
+    item.addEventListener("mousemove", () => { if (paletteIndex !== index) { paletteIndex = index; highlightPalette(); } });
+    item.addEventListener("click", () => runPalette(index));
+    return item;
+  }));
+  $("palette-input").setAttribute("aria-activedescendant", `palette-option-${paletteIndex}`);
+}
+
+function highlightPalette() {
+  [...$("palette-list").children].forEach((item, index) => item.setAttribute("aria-selected", String(index === paletteIndex)));
+  $("palette-list").children[paletteIndex]?.scrollIntoView({block:"nearest"});
+  $("palette-input").setAttribute("aria-activedescendant", `palette-option-${paletteIndex}`);
+}
+
+function openPalette() {
+  const dialog = $("palette"); if (!dialog || dialog.open) return;
+  document.querySelectorAll("dialog[open]").forEach(open => open.close());
+  $("palette-input").value = ""; paletteIndex = 0; renderPalette(); dialog.showModal(); $("palette-input").focus();
+}
+
+function runPalette(index) {
+  const command = paletteItems[index]; if (!command) return;
+  $("palette").close(); command.run();
+}
+
+function bindPalette() {
+  $("palette-open")?.addEventListener("click", openPalette);
+  $("palette-input")?.addEventListener("input", () => { paletteIndex = 0; renderPalette(); });
+  $("palette-input")?.addEventListener("keydown", event => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); if (!paletteItems.length) return; paletteIndex = (paletteIndex + (event.key === "ArrowDown" ? 1 : -1) + paletteItems.length) % paletteItems.length; highlightPalette(); }
+    else if (event.key === "Enter") { event.preventDefault(); runPalette(paletteIndex); }
+  });
+  $("palette")?.addEventListener("click", event => { if (event.target === $("palette")) $("palette").close(); });
+  let leader = 0;
+  document.addEventListener("keydown", event => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); if ($("palette").open) $("palette").close(); else openPalette(); return; }
+    const target = event.target;
+    if (event.metaKey || event.ctrlKey || event.altKey || target.closest?.("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
+    const key = event.key.toLowerCase();
+    if (Date.now() - leader < 900) {
+      const view = {h:"overview", k:"api-keys", c:"connect", a:"requests", d:"diagnostics", s:"settings"}[key]; leader = 0;
+      if (view) { event.preventDefault(); showView(view); }
+      return;
+    }
+    if (key === "g") leader = Date.now();
+    else if (key === "n") { event.preventDefault(); openCreate(); }
+    else if (key === "/") { event.preventDefault(); openPalette(); }
+  });
 }
 
 elements.form.addEventListener("submit", async (event) => {
@@ -1092,7 +1349,7 @@ elements.form.addEventListener("submit", async (event) => {
     if ($("key-expiry-mode")) $("key-expiry-mode").value = "never";
     elements.allowedOrigins.value = "";
     renderExpiryMode(); persistPreferences();
-    setStatus("Key created. Copy the secret now."); await refreshDashboard();
+    setStatus("Key created. Copy the secret now."); toast(`Key “${name}” created. Copy the secret now.`); await refreshDashboard();
   } catch (error) {
     setStatus(error.message, true);
     const errorElement = /origin/i.test(error.message) ? $("origins-error") : /workspace|directory|folder/i.test(error.message) ? $("workspace-error") : $("create-error");
@@ -1130,6 +1387,9 @@ $("login-link").addEventListener("click", (event) => {
   postDesktop({ type: "codex-desktop-open-login" });
 });
 $("login-cancel").addEventListener("click", () => deviceLogin("DELETE"));
+$("home-primary")?.addEventListener("click", () => heroAction());
+bindTabs();
+bindPalette();
 bindNavigation();
 renderSetup();
 loadConfig();
