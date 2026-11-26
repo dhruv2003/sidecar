@@ -12,6 +12,7 @@ import { loadConfig, prepareConfig, type AppConfig } from './config.js'
 import { writeStream } from './streaming.js'
 import { RequestLifecycle } from './lifecycle.js'
 import { CodexLoginManager } from './login.js'
+import { ModelCatalogRefresher } from './model-catalog.js'
 import { isInsideWorkspace, resolveWorkspacePath } from './security.js'
 import { normalizeAllowedOrigins, normalizeOrigin } from './origins.js'
 
@@ -21,6 +22,7 @@ interface Dependencies {
   sessions: CodexSessionManager
   admission: AdmissionController
   lifecycle: RequestLifecycle
+  modelCatalog?: ModelCatalogRefresher
 }
 
 class InvalidRequestError extends Error {
@@ -40,7 +42,8 @@ export function createApp(overrides: Partial<Dependencies> = {}) {
   })
   const app = express()
   const lifecycle = overrides.lifecycle ?? new RequestLifecycle()
-  const loginManager = new CodexLoginManager(config)
+  // A new sign-in may unlock the account's live model catalog.
+  const loginManager = new CodexLoginManager(config, () => { void overrides.modelCatalog?.refresh() })
   app.locals.loginManager = loginManager
   lifecycle.signal.addEventListener('abort', () => loginManager.dispose(), { once: true })
   app.locals.lifecycle = lifecycle
@@ -1052,9 +1055,12 @@ if (!process.env.CODEX_DESKTOP_DATA_DIR && process.argv[1] && import.meta.url ==
   await prepareConfig(config)
   const lifecycle = new RequestLifecycle()
   const sessions = new CodexSessionManager(config)
-  const app = createApp({ config, lifecycle, sessions })
+  const modelCatalog = new ModelCatalogRefresher(config)
+  await modelCatalog.start()
+  const app = createApp({ config, lifecycle, sessions, modelCatalog })
   const server = createServer(app)
   const shutdown = (): void => {
+    modelCatalog.stop()
     // Device login is interactive background work, not an HTTP handler to drain.
     ;(app.locals.loginManager as CodexLoginManager).dispose()
     void lifecycle.shutdown(server, config.shutdownGraceMs).then(() => {

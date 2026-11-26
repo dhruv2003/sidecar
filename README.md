@@ -190,14 +190,27 @@ Store the key through VS Code's input prompt, not workspace settings. Check
 `/v1/models` before adding another ID, and reload VS Code if the model is not
 visible.
 
+### Model catalog
+
+Sidecar reads the enabled models from the Codex CLI itself (`codex debug models`)
+at startup, after each successful Codex sign-in, and every six hours. It prefers
+the catalog of a signed-in key, which Codex refreshes from the account, so new
+models usually appear without a Sidecar update. Without a signed-in key it uses
+the catalog bundled with the CLI. Only models Codex lists in its own picker are
+enabled; retired or hidden models drop out automatically. Reasoning levels and
+image support come from the same catalog.
+
+If the catalog cannot be read, Sidecar falls back to this built-in list:
+
 | Model IDs | Default reasoning levels |
 | --- | --- |
 | `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6.1-terra`, `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-6-luna`, `gpt-5.6-luna` | `low` through `max` |
-| `gpt-5.5`, `gpt-5.4-mini` | `low` through `xhigh` |
+| `gpt-5.5` | `low` through `xhigh` |
 
-`CODEX_MODELS`, `CODEX_IMAGE_MODELS`, and `CODEX_MODEL_EFFORTS` override
-these defaults. `/v1/models` returns enabled IDs, reasoning levels, and image
+`CODEX_MODELS`, `CODEX_IMAGE_MODELS`, and `CODEX_MODEL_EFFORTS` pin a fixed
+value and are never replaced by the discovered catalog. `/v1/models` returns
+enabled IDs, reasoning levels, and image
 modality. Chat Completions sends `reasoning_effort`; Responses sends
 `reasoning.effort`.
 

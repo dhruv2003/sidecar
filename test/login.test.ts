@@ -42,6 +42,16 @@ describe('device login', () => {
     expect(manager.isRunning(keyId)).toBe(false)
   })
 
+  it('reports a successful sign-in so the model catalog can refresh', async () => {
+    const { child, directory } = await fixture()
+    const onSuccess = vi.fn()
+    const manager = new CodexLoginManager(loadConfig({ CODEX_STATE_ROOT: directory }), onSuccess)
+    managers.push(manager)
+    await manager.start(keyId)
+    child.emit('close', 0)
+    expect(onSuccess).toHaveBeenCalledWith(keyId)
+  })
+
   it('prevents duplicate login processes and clears the code on cancellation', async () => {
     const { manager, child } = await fixture()
     await Promise.all([manager.start(keyId), manager.start(keyId)])

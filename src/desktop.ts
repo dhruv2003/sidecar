@@ -4,6 +4,7 @@ import { isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { pathToFileURL } from 'node:url'
 import { loadConfig, prepareConfig, type AppConfig } from './config.js'
+import { ModelCatalogRefresher } from './model-catalog.js'
 import { createApp } from './server.js'
 import { CodexSessionManager } from './codex.js'
 import { RequestLifecycle } from './lifecycle.js'
@@ -42,7 +43,9 @@ export async function startDesktop(env: NodeJS.ProcessEnv = process.env): Promis
   const migration = await migrateLegacyDesktop({ dataDirectory, workspaceRoot: config.workspaceRoot })
   const lifecycle = new RequestLifecycle()
   const sessions = new CodexSessionManager(config)
-  const app = createApp({ config, lifecycle, sessions })
+  const modelCatalog = new ModelCatalogRefresher(config)
+  await modelCatalog.start()
+  const app = createApp({ config, lifecycle, sessions, modelCatalog })
   app.locals.desktopMigration = migration
   const server = createServer(app)
   const input = createInterface({ input: process.stdin })
@@ -50,6 +53,7 @@ export async function startDesktop(env: NodeJS.ProcessEnv = process.env): Promis
   const shutdown = (): void => {
     if (stopping) return
     stopping = true
+    modelCatalog.stop()
     input.close()
     process.stdin.pause()
     ;(app.locals.loginManager as CodexLoginManager).dispose()
